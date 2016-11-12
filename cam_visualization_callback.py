@@ -1,5 +1,6 @@
 from keras import backend as K
 from keras.callbacks import Callback
+from keras.utils.np_utils import to_categorical
 
 import numpy as np
 from sklearn import preprocessing
@@ -10,17 +11,27 @@ from matplotlib.pyplot import imshow
 from matplotlib.pyplot import show
 from scipy.misc import imresize
 from PIL import Image
+import os
 
-from .util import stitch_pil_images
+from .util import stitch_pil_images, stitch_pil_image_from_values
 
 class CAMVisualizationCallback(Callback):
 
-    def __init__(self, generator, dense_softmax_layer_name = None, last_conv_layer_name = None):
+    def __init__(self, generator, directory, dense_softmax_layer_name = None, last_conv_layer_name = None, base_file_name = 'cam'):
         self.generator = generator
+        self.directory = directory
+        self.base_file_name = base_file_name
         self.dense_softmax_layer_name = dense_softmax_layer_name
         self.last_conv_layer_name = last_conv_layer_name
         self.cam_threshold_pct = 0.5
         self.cam_transparency_pct = 0.75
+        self.image_border_thickness = 5
+        self.image_margin = 5
+
+        # make sure the directory exists before writing filter images to it
+        if not os.path.exists(self.directory):
+            os.makedirs(self.directory)
+
 
     def on_epoch_begin(self, epoch, logs={}):
         pass
@@ -56,7 +67,7 @@ class CAMVisualizationCallback(Callback):
             cam = imresize(cam, (height,width))
 
             # apply color map to cam, clip values under threshold, apply transparency to layer
-            cm_cam = plt.cm.jet(cam)
+            cm_cam = plt.cm.jet(cam) # TODO: Allow COLORMAP to be configured via string paramter
             cm_cam[np.where(cam < self.cam_threshold_pct)] = 0
             cam = np.uint8(cm_cam * 255)
             cam[:,:,3] = np.uint((1-self.cam_transparency_pct)*255)
@@ -72,9 +83,18 @@ class CAMVisualizationCallback(Callback):
             pil_img = Image.alpha_composite(x_pil_img_rgba, cam_pil_img_rgba)
             pil_img_list.append(pil_img)
 
-        stitched_pil_images = stitch_pil_images(pil_img_list)
+        accuracy_img_size = (pil_img_list[0].size[0] + self.image_border_thickness * 2,
+                             pil_img_list[0].size[1] + self.image_border_thickness * 2)
+        accuracy_list = self.get_accuracy_list(batch_x, batch_y).astype(dtype=np.int32)
 
-        stitched_pil_images.save('images/epoch_%d_cam.png' % epoch)
+        stitched_pil_cam_images = stitch_pil_images(pil_img_list, margin = self.image_margin, border_thickness=self.image_border_thickness)
+        stitched_pil_accuracy_images = stitch_pil_image_from_values(accuracy_list, accuracy_img_size, margin=self.image_margin, cmap_name='seismic_r')
+
+        stitched_pil_output_image = Image.alpha_composite(stitched_pil_accuracy_images, stitched_pil_cam_images)
+
+        full_file_name = os.path.join(self.directory, self.base_file_name + '_epoch_' + str(epoch) + '.png')
+
+        stitched_pil_output_image.save(full_file_name)
 
     def on_batch_begin(self, batch, logs={}):
         pass
@@ -89,3 +109,38 @@ class CAMVisualizationCallback(Callback):
 
     def on_train_end(self, logs={}):
         pass
+
+    def get_accuracy_list(self, batch_x, batch_y):
+
+        y_pred = self.model.predict_on_batch(batch_x)
+        y_true = to_categorical(batch_y, nb_classes=2)
+
+        accuracy_list = np.argmax(y_pred, axis = 1) == np.argmax(y_true, axis = 1)
+
+        return accuracy_list
+
+        #loss_function_name = 'sparse_categorical_crossentropy'
+
+        #if loss_function_name == 'sparse_categorical_crossentropy':
+
+
+        '''
+        if metric == 'accuracy' or metric == 'acc':
+            # custom handling of accuracy (because of class mode duality)
+            output_shape = self.internal_output_shapes[i]
+            if output_shape[-1] == 1 or self.loss_functions[i] == objectives.binary_crossentropy:
+                # case: binary accuracy
+                self.metrics_tensors.append(metrics_module.binary_accuracy(y_true, y_pred))
+            elif self.loss_functions[i] == objectives.sparse_categorical_crossentropy:
+                # case: categorical accuracy with sparse targets
+                self.metrics_tensors.append(
+                    metrics_module.sparse_categorical_accuracy(y_true, y_pred))
+            else:
+                # case: categorical accuracy with dense targets
+                self.metrics_tensors.append(metrics_module.categorical_accuracy(y_true, y_pred))
+            if len(self.output_names) == 1:
+                self.metrics_names.append('acc')
+            else:
+                self.metrics_names.append(self.output_layers[i].name + '_acc')
+        self.metrics_names.append(self.output_layers[i].name + '_' + metric_fn.__name__)
+        '''

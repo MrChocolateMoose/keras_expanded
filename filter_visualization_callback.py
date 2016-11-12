@@ -8,12 +8,20 @@ from skimage.filter import gaussian
 from keras import backend as K
 from keras.callbacks import Callback
 
+from PIL import ImageChops
+from PIL import Image
+
+from .util import stitch_pil_image_from_arrays, stitch_pil_image_from_values
+
 class FilterVisualizationCallback(Callback):
 
     def __init__(self, directory, conv_layer_prefix = "conv", base_filename = "filters"):
         self.base_filename = base_filename
         self.directory = directory
         self.conv_layer_prefix = conv_layer_prefix
+        self.steps = 40
+        self.image_border_thickness = 5
+        self.image_margin = 5
 
         # make sure the directory exists before writing filter images to it
         if not os.path.exists(self.directory):
@@ -38,79 +46,39 @@ class FilterVisualizationCallback(Callback):
                                      for layer
                                      in self.model.layers[1:]
                                      if self.conv_layer_prefix in layer.name])
-        self.conv_size_dict = dict([(layer_name, self.__get_conv_size_details(layer))
-                                     for layer_name, layer
-                                     in self.conv_layer_dict.items()])
-
-    # TODO: probably could remove and calculate in stitching: len(filter)**0.5
-    def __get_conv_size_details(self, layer):
-
-        filter_length = layer.output_shape[1]
-
-        val = int(math.ceil(math.sqrt(filter_length)))
-
-        return (filter_length, val)
 
 
     def on_epoch_end(self, epoch, logs={}):
 
         for layer_name, layer in self.conv_layer_dict.items():
-            self.base_filename = 'filters_reg'
+            filters, losses = self.__get_visualized_layer_filters_with_loss(layer_name, True)
 
-            filters = self.__get_visualized_layer_filters(layer_name, False)
-
-            stitched_filters = self.__stitch_visualized_layer_filters(layer_name, filters)
+            stitched_filters = self.__stitch_visualized_layer_filters(layer_name, filters, losses)
             self.__save_stitched_visualized_layer(layer_name, epoch, stitched_filters)
 
-            self.base_filename = 'filters_decay'
+    def __save_stitched_visualized_layer(self, layer_name, epoch, stitched_pil_image):
+        full_file_name = os.path.join(self.directory, layer_name + '_' + str(epoch) + '_' + self.base_filename + '.png')
 
-            filters = self.__get_visualized_layer_filters(layer_name, True)
-
-            stitched_filters = self.__stitch_visualized_layer_filters(layer_name, filters)
-            self.__save_stitched_visualized_layer(layer_name, epoch, stitched_filters)
-
-    def __save_stitched_visualized_layer(self, layer_name, epoch, stitched_filters):
-        imsave(os.path.join(self.directory, layer_name + '_' + str(epoch) + '_' + self.base_filename + '.png'), stitched_filters)
+        stitched_pil_image.save(full_file_name)
 
 
-    def __stitch_visualized_layer_filters(self, layer_name, filters):
+    def __stitch_visualized_layer_filters(self, layer_name, filters, losses):
 
-        filter_length, filter_grid_dim = self.conv_size_dict[layer_name]
+        loss_img_size = (filters[0].shape[0] + self.image_border_thickness * 2, filters[0].shape[1] + self.image_border_thickness * 2)
 
-        # build a black picture with enough space for
-        # our 8 x 8 filters of size 128 x 128, with a 5px margin in between
-        margin = 5
-        width = filter_grid_dim * self.img_width + (filter_grid_dim - 1) * margin
-        height = filter_grid_dim * self.img_height + (filter_grid_dim - 1) * margin
-        stitched_filters = np.zeros((width, height, 3))
+        output_pil_image = stitch_pil_image_from_arrays(filters, margin=self.image_margin, border_thickness=self.image_border_thickness, mode='RGB')
+        output_pil_losses = stitch_pil_image_from_values(losses, loss_img_size, margin=self.image_margin)
 
-        # fill the picture with our saved filters
-        for i in range(filter_grid_dim):
-            for j in range(filter_grid_dim):
-
-                index = i * filter_grid_dim + j
-
-                if index >= filter_length:
-                    continue
-
-                img, loss = filters[index]
-
-                if img.shape[2] == 1:
-                    img = np.asarray(np.dstack((img, img, img)), dtype=np.uint8)
+        output_pil_image = Image.alpha_composite(output_pil_losses, output_pil_image)
+        return output_pil_image
 
 
-                stitched_filters[(self.img_width + margin) * i: (self.img_width + margin) * i + self.img_width,
-                (self.img_height + margin) * j: (self.img_height + margin) * j + self.img_height, :] = img
+    def __get_visualized_layer_filters_with_loss(self, layer_name, extra):
 
+        filter_length = self.conv_layer_dict[layer_name].output_shape[1]
 
-        return stitched_filters
-
-
-    def __get_visualized_layer_filters(self, layer_name, extra):
-
-        filter_length, _ = self.conv_size_dict[layer_name]
-
-        kept_filters = []
+        filters = []
+        losses = []
         for filter_index in range(0, filter_length):
 
             #print('Processing filter %d' % filter_index)
@@ -144,7 +112,7 @@ class FilterVisualizationCallback(Callback):
             input_img_data = (input_img_data - 0.5) * 20 + 128
 
             # we run gradient ascent for 20 steps
-            for i in range(20):
+            for i in range(self.steps):
                 loss_value, grads_value = iterate([input_img_data])
                 input_img_data += grads_value * step
 
@@ -160,7 +128,8 @@ class FilterVisualizationCallback(Callback):
             # decode the resulting input image
             #if loss_value > 0:
             img = self.__deprocess_image(input_img_data[0])
-            kept_filters.append((img, loss_value))
+            filters.append(img)
+            losses.append(loss_value)
             end_time = time.time()
             #print('Filter %d processed in %ds' % (filter_index, end_time - start_time))
 
@@ -168,7 +137,7 @@ class FilterVisualizationCallback(Callback):
         # we will only keep the top 64 filters.
         #kept_filters.sort(key=lambda x: x[1], reverse=True)
         #kept_filters = kept_filters[:n * n]
-        return kept_filters
+        return (filters, losses)
 
     def __normalize(self, x):
         '''
