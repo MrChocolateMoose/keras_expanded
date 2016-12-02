@@ -4,7 +4,7 @@ import math
 import os
 from scipy.misc import imsave
 import numpy as np
-from skimage.filter import gaussian
+from skimage.filters import gaussian
 from keras import backend as K
 from keras.callbacks import Callback
 
@@ -15,13 +15,17 @@ from .util import stitch_pil_image_from_arrays, stitch_pil_image_from_values
 
 class FilterVisualizationCallback(Callback):
 
-    def __init__(self, directory, conv_layer_prefix = "conv", base_filename = "filters"):
+    def __init__(self, directory, conv_layer_prefix = "conv", base_filename = "filters", **kwargs):
         self.base_filename = base_filename
         self.directory = directory
         self.conv_layer_prefix = conv_layer_prefix
-        self.steps = 40
-        self.image_border_thickness = 5
-        self.image_margin = 5
+
+        self.steps = kwargs.get("steps", 40)
+        self.image_border_thickness = kwargs.get("image_thickness", 5)
+        self.image_margin = kwargs.get("image_margin", 5)
+        self.max_filters = kwargs.get("max_filters", None)
+        self.every_n_epochs = kwargs.get("every_n_epochs", None)
+        self.skip_initial_epoch = kwargs.get("skip_initial_epoch", False)
 
         # make sure the directory exists before writing filter images to it
         if not os.path.exists(self.directory):
@@ -38,7 +42,7 @@ class FilterVisualizationCallback(Callback):
         else:
             self.img_channels = self.model.layers[0].input_shape[3]
             self.img_width = self.model.layers[0].input_shape[1]
-            self.img_height = self.model.layers[0].input_shape[2]
+            self.img_height= self.model.layers[0].input_shape[2]
 
 
         # get the symbolic outputs of each "key" layer (we gave them unique names).
@@ -50,6 +54,9 @@ class FilterVisualizationCallback(Callback):
 
     def on_epoch_end(self, epoch, logs={}):
 
+        if self.every_n_epochs is not None and (epoch % self.every_n_epochs != 0 or (self.skip_initial_epoch == True and epoch == 0)):
+            return
+
         for layer_name, layer in self.conv_layer_dict.items():
             filters, losses = self.__get_visualized_layer_filters_with_loss(layer_name, True)
 
@@ -57,18 +64,24 @@ class FilterVisualizationCallback(Callback):
             self.__save_stitched_visualized_layer(layer_name, epoch, stitched_filters)
 
     def __save_stitched_visualized_layer(self, layer_name, epoch, stitched_pil_image):
-        full_file_name = os.path.join(self.directory, layer_name + '_' + str(epoch) + '_' + self.base_filename + '.png')
+        generated_file_name = layer_name + '_' + str(epoch) + '_' + self.base_filename + '.png'
+        full_file_name = os.path.join(self.directory, generated_file_name)
 
         stitched_pil_image.save(full_file_name)
 
 
     def __stitch_visualized_layer_filters(self, layer_name, filters, losses):
 
-        loss_img_size = (filters[0].shape[0] + self.image_border_thickness * 2, filters[0].shape[1] + self.image_border_thickness * 2)
+        # assume filter sizes are uniform and the first filter's shape represents all of the filter's shapes
+        loss_img_size = (filters[0].shape[0] + self.image_border_thickness * 2,
+                         filters[0].shape[1] + self.image_border_thickness * 2)
 
         output_pil_image = stitch_pil_image_from_arrays(filters, margin=self.image_margin, border_thickness=self.image_border_thickness, mode='RGB')
+
+        # Turn loss values into a color map which will form a border around the filter images
         output_pil_losses = stitch_pil_image_from_values(losses, loss_img_size, margin=self.image_margin)
 
+        # Combine images via compositing
         output_pil_image = Image.alpha_composite(output_pil_losses, output_pil_image)
         return output_pil_image
 
@@ -76,6 +89,9 @@ class FilterVisualizationCallback(Callback):
     def __get_visualized_layer_filters_with_loss(self, layer_name, extra):
 
         filter_length = self.conv_layer_dict[layer_name].output_shape[1]
+
+        if self.max_filters is not None:
+            filter_length = min(self.max_filters, filter_length)
 
         filters = []
         losses = []
@@ -99,7 +115,7 @@ class FilterVisualizationCallback(Callback):
             grads = self.__normalize(grads)
 
             # this function returns the loss and grads given the input picture
-            iterate = K.function([self.input_img], [loss, grads])
+            iterate = K.function([self.input_img, K.learning_phase()], [loss, grads])
 
             # step size for gradient ascent
             step = 1.
@@ -113,7 +129,7 @@ class FilterVisualizationCallback(Callback):
 
             # we run gradient ascent for 20 steps
             for i in range(self.steps):
-                loss_value, grads_value = iterate([input_img_data])
+                loss_value, grads_value = iterate([input_img_data, 1])
                 input_img_data += grads_value * step
 
                 if extra == True:

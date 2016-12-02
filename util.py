@@ -10,9 +10,10 @@ DEFAULT_MARGIN = 5
 
 def stitch_pil_image_from_values(value_list, size, cmap_name = DEFAULT_CMAP_NAME, margin = DEFAULT_MARGIN, border_thickness = DEFAULT_BORDER_THICKNESS):
 
-    values = np.array(value_list)
-    scaled_values = preprocessing.MinMaxScaler(feature_range=(0, 1)).fit_transform(np.log(values + 1))
-    scaled_values = np.expand_dims(scaled_values, axis=1)
+    values = np.array(value_list).reshape(-1, 1)
+    log_values = np.log(np.clip(values + 1, 1, np.inf))
+    scaled_values = preprocessing.MinMaxScaler(feature_range=(0, 1)).fit_transform(log_values)
+
     scaled_values = np.expand_dims(scaled_values, axis=1)
 
     cmap = plt.cm.get_cmap(cmap_name)
@@ -40,6 +41,7 @@ def stitch_pil_image_from_arrays(image_list, mode, margin = DEFAULT_MARGIN, bord
     for image_array in image_list:
 
         pil_image = Image.fromarray(image_array,mode)
+        pil_image = pil_image.transpose(Image.ROTATE_90)
         pil_image_list.append(pil_image)
 
     output_pil_image = stitch_pil_images(pil_image_list, margin = margin, border_thickness = border_thickness)
@@ -93,6 +95,6 @@ def stitch_pil_images(pil_image_list, pil_image_size=None, margin=DEFAULT_MARGIN
             left = (pil_image_size[0] + margin + (border_thickness * 2)) * x + border_thickness
             top = (pil_image_size[1] + margin + (border_thickness * 2)) * y + border_thickness
 
-            output_pil_image.paste(cur_pil_image, box=(top,left))
+            output_pil_image.paste(cur_pil_image, box=(left, top))
 
     return output_pil_image
