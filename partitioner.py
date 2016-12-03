@@ -9,37 +9,56 @@ def stratified_partition(all_data_dir, data_dir, named_partitions):
 
     stratified_partition_subdirs(all_data_dir, all_data_subdirs, data_dir, named_partitions)
 
-def stratified_partition_subdirs(all_data_dir, all_data_subdirs, data_dir, named_partitions):
+def stratified_partition_subdirs(all_data_dir, all_data_label_dirs, new_data_dir, named_partitions, new_label_dir = None, use_src_label_dir_as_fname_prefix = False):
 
-    for cur_data_subdir in all_data_subdirs:
-        for name, partition_pct in named_partitions.items():
+    # make paths to new partitioned label dirs
+    for cur_label_dir in all_data_label_dirs:
+        for partition_name, partition_pct in named_partitions.items():
 
-            partition_data_subdir = cur_data_subdir.replace(all_data_dir, os.path.join(data_dir, name))
+            if new_label_dir == None:
+                label_dir = os.path.basename(cur_label_dir.rstrip("/"))
+            else:
+                label_dir = new_label_dir
 
-            if not os.path.exists(partition_data_subdir):
-                os.makedirs(partition_data_subdir)
+            new_data_label_dir = os.path.join(new_data_dir, partition_name, label_dir)
 
-    for cur_data_subdir in all_data_subdirs:
+            if not os.path.exists(new_data_label_dir):
+                os.makedirs(new_data_label_dir)
 
-        cur_subdir_files = glob(cur_data_subdir + "/*")
+    # move files from label dirs to new partitioned paths
+    for cur_label_dir in all_data_label_dirs:
 
-        # count all files in subdir
-        cur_subdir_files_len = len(cur_subdir_files)
+        cur_label_dir_files = glob(cur_label_dir + "/*")
 
-        for name, partition_pct in named_partitions.items():
-            # get remaining files in subdir and len
-            cur_remaining_subdir_files = glob(cur_data_subdir + "/*")
-            cur_remaining_subdir_files_len = len(cur_remaining_subdir_files)
+        # count all files in cur label dir
+        cur_label_dir_files_len = len(cur_label_dir_files)
 
-            files_partition_size = min(int(math.ceil(cur_subdir_files_len * partition_pct)),
-                                       cur_remaining_subdir_files_len)
+        for partition_name, partition_pct in named_partitions.items():
+            # get remaining files in label dir and len
+            cur_remaining_label_dir_files = glob(cur_label_dir + "/*")
+            cur_remaining_label_dir_files_len = len(cur_remaining_label_dir_files)
+
+            files_partition_size = min(int(math.ceil(cur_label_dir_files_len * partition_pct)),
+                                       cur_remaining_label_dir_files_len)
 
             # sample from remaining
-            partitioned_subdir_files = random.sample(cur_remaining_subdir_files, files_partition_size)
+            partitioned_label_dir_files = random.sample(cur_remaining_label_dir_files, files_partition_size)
 
-            for file_to_partition in partitioned_subdir_files:
+            for file_to_partition in partitioned_label_dir_files:
+
                 source = file_to_partition
-                dest = file_to_partition.replace(all_data_dir, os.path.join(data_dir, name))
+
+                if new_label_dir == None:
+                    label_dir = os.path.basename(os.path.dirname(file_to_partition))
+                else:
+                    label_dir = new_label_dir
+
+                if use_src_label_dir_as_fname_prefix == True:
+                    fname =  os.path.basename(os.path.dirname(file_to_partition)) + "_" + os.path.basename(file_to_partition)
+                else:
+                    fname = os.path.basename(file_to_partition)
+
+                dest = os.path.join(new_data_dir, partition_name, label_dir, fname)
 
                 shutil.move(source, dest)
 
