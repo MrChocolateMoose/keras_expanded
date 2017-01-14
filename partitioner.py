@@ -1,4 +1,5 @@
 from glob import glob
+import zipfile
 import random
 import shutil
 import os.path
@@ -64,3 +65,20 @@ def stratified_partition_subdirs(all_data_dir, all_data_label_dirs, new_data_dir
 
     #TODO: perform destructive delete of original dir? How to prevent unintended consequences?
     #os.removedirs(all_data_dir)
+
+def extract_data(data_dir_name = "data", force_remove = False):
+
+    abs_data_dir = os.path.abspath(data_dir_name)
+
+    while len(glob(abs_data_dir + "/*/")) != 0:
+        msg = "Delete all data in folder: %s?" % abs_data_dir
+
+        if not force_remove:
+            force_remove = input("%s (y/N) " % msg).lower() == 'y'
+
+        if force_remove:
+            shutil.rmtree(abs_data_dir)
+
+    with zipfile.ZipFile(data_dir_name + ".zip") as zf:
+        zf.extractall(path=abs_data_dir)
+

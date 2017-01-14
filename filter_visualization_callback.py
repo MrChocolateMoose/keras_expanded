@@ -15,56 +15,79 @@ from .util import stitch_pil_image_from_arrays, stitch_pil_image_from_values
 
 class FilterVisualizationCallback(Callback):
 
-    def __init__(self, directory, conv_layer_prefix = "conv", base_filename = "filters", **kwargs):
+    def __init__(self, directory, conv_layer_prefix = "conv", base_filename = "filters", model = None, **kwargs):
         self.base_filename = base_filename
         self.directory = directory
         self.conv_layer_prefix = conv_layer_prefix
+        self.__is_initialized = False
+        self.__is_training = False
 
+        self.epoch = None
         self.steps = kwargs.get("steps", 40)
         self.image_border_thickness = kwargs.get("image_thickness", 5)
         self.image_margin = kwargs.get("image_margin", 5)
         self.max_filters = kwargs.get("max_filters", None)
         self.every_n_epochs = kwargs.get("every_n_epochs", None)
         self.skip_initial_epoch = kwargs.get("skip_initial_epoch", False)
+        self.model = model
 
         # make sure the directory exists before writing filter images to it
         if not os.path.exists(self.directory):
             os.makedirs(self.directory)
 
+    def init(self):
+
+        if not self.__is_initialized:
+            self.__is_initialized = True
+
+            # this is the placeholder for the input images
+            self.input_img = self.model.input
+
+            if K.image_dim_ordering() == 'th':
+                self.img_channels = self.model.layers[0].input_shape[1]
+                self.img_width = self.model.layers[0].input_shape[2]
+                self.img_height = self.model.layers[0].input_shape[3]
+            else:
+                self.img_channels = self.model.layers[0].input_shape[3]
+                self.img_width = self.model.layers[0].input_shape[1]
+                self.img_height = self.model.layers[0].input_shape[2]
+
+            # get the symbolic outputs of each "key" layer (we gave them unique names).
+            self.conv_layer_dict = dict([(layer.name, layer)
+                                         for layer
+                                         in self.model.layers
+                                         if self.conv_layer_prefix in layer.name])
+
+
+
     def on_train_begin(self, logs={}):
-        # this is the placeholder for the input images
-        self.input_img = self.model.input
-
-        if K.image_dim_ordering() == 'th':
-            self.img_channels = self.model.layers[0].input_shape[1]
-            self.img_width = self.model.layers[0].input_shape[2]
-            self.img_height = self.model.layers[0].input_shape[3]
-        else:
-            self.img_channels = self.model.layers[0].input_shape[3]
-            self.img_width = self.model.layers[0].input_shape[1]
-            self.img_height= self.model.layers[0].input_shape[2]
+        self.__is_training = True
 
 
-        # get the symbolic outputs of each "key" layer (we gave them unique names).
-        self.conv_layer_dict = dict([(layer.name, layer)
-                                     for layer
-                                     in self.model.layers[1:]
-                                     if self.conv_layer_prefix in layer.name])
+    def visualize(self):
+        self.init()
 
+        for layer_name, layer in self.conv_layer_dict.items():
+            filters, losses = self.__get_visualized_layer_filters_with_loss(layer_name, True)
+
+            stitched_filters = self.__stitch_visualized_layer_filters(layer_name, filters, losses)
+            self.__save_stitched_visualized_layer(layer_name, self.epoch, stitched_filters)
 
     def on_epoch_end(self, epoch, logs={}):
 
         if self.every_n_epochs is not None and (epoch % self.every_n_epochs != 0 or (self.skip_initial_epoch == True and epoch == 0)):
             return
 
-        for layer_name, layer in self.conv_layer_dict.items():
-            filters, losses = self.__get_visualized_layer_filters_with_loss(layer_name, True)
+        self.epoch = epoch
 
-            stitched_filters = self.__stitch_visualized_layer_filters(layer_name, filters, losses)
-            self.__save_stitched_visualized_layer(layer_name, epoch, stitched_filters)
+        self.visualize()
 
     def __save_stitched_visualized_layer(self, layer_name, epoch, stitched_pil_image):
-        generated_file_name = layer_name + '_' + str(epoch) + '_' + self.base_filename + '.png'
+
+        if self.epoch == None:
+            generated_file_name = layer_name + '_' + self.base_filename + '.png'
+        else:
+            generated_file_name = layer_name + '_' + str(epoch) + '_' + self.base_filename + '.png'
         full_file_name = os.path.join(self.directory, generated_file_name)
 
         stitched_pil_image.save(full_file_name)
@@ -102,7 +125,7 @@ class FilterVisualizationCallback(Callback):
 
             # we build a loss function that maximizes the activation
             # of the nth filter of the layer considered
-            layer_output = self.conv_layer_dict[layer_name].output
+            layer_output = self.conv_layer_dict[layer_name].get_output_at(0)
             if K.image_dim_ordering() == 'th':
                 loss = K.mean(layer_output[:, filter_index, :, :])
             else:
