@@ -42,6 +42,8 @@ class FilterVisualizationCallback(Callback):
 
             # this is the placeholder for the input images
             self.input_img = self.model.input
+            if isinstance(self.input_img, list):
+                self.input_img = self.input_img[0]
 
             if K.image_dim_ordering() == 'th':
                 self.img_channels = self.model.layers[0].input_shape[1]

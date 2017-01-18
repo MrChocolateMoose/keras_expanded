@@ -18,14 +18,17 @@ from .util import stitch_pil_images, stitch_pil_image_from_values
 
 class CAMVisualizationCallback(Callback):
 
-    def __init__(self, generator, directory, dense_softmax_layer_name = None, last_conv_layer_name = None, base_file_name = 'cam', model = None, **kwargs):
+    def __init__(self, generator, directory, cam_funcs = None, base_file_name = 'cam', model = None, **kwargs):
         self.generator = generator
         self.directory = directory
         self.base_file_name = base_file_name
-        self.dense_softmax_layer_name = dense_softmax_layer_name
-        self.last_conv_layer_name = last_conv_layer_name
         self.__is_training = False
         self.__batch_number = 0
+
+        if cam_funcs is None:
+            cam_funcs = [lambda layer: issubclass(type(layer), Convolution2D)]
+
+        self.cam_funcs = cam_funcs
 
         self.cam_threshold_pct = kwargs.get("cam_threshold_pct", 0.5)
         self.cam_transparency_pct = kwargs.get("cam_transparency_pct", 0.75)
@@ -60,15 +63,11 @@ class CAMVisualizationCallback(Callback):
         def global_average_pooling(x):
             return np.mean(x, axis=(2,3))
 
+        for current_layer in (layer for layer in reversed(self.model.layers) if any(cam_func(layer) for cam_func in self.cam_funcs)):
 
-        #last_conv_layer = next((layer for layer in reversed(self.model.layers) if issubclass(type(layer), Convolution2D)), None)
+            layer_name = current_layer.name
 
-        for last_conv_layer in (layer for layer in reversed(self.model.layers) if issubclass(type(layer), Convolution2D)):
-
-
-            layer_name = last_conv_layer.name
-
-            get_output = K.function([self.model.layers[0].input, K.learning_phase()], [last_conv_layer.get_output_at(0)])
+            get_output = K.function([self.model.layers[0].input, K.learning_phase()], [current_layer.get_output_at(0)])
             [conv_outputs_batch] = get_output([batch_x, 1])
 
             class_weights = global_average_pooling(conv_outputs_batch)
